@@ -92,13 +92,13 @@ void Ekf::controlGpsFusion(const imuSample &imu_delayed)
 
 		// GNSS velocity
 		const Vector3f velocity{gps_sample.vel};
-		const float vel_var = sq(math::max(gps_sample.sacc, _params.gps_vel_noise));
+		const float vel_var = sq(math::max(gps_sample.sacc, _params.gps_vel_noise, 0.01f));
 		const Vector3f vel_obs_var(vel_var, vel_var, vel_var * sq(1.5f));
-		updateVelocityAidSrcStatus(gps_sample.time_us,
-					   velocity,                                                   // observation
-					   vel_obs_var,                                                // observation variance
-					   math::max(_params.gps_vel_innov_gate, 1.f),                 // innovation gate
-					   _aid_src_gnss_vel);
+		updateVelocityAidStatus(_aid_src_gnss_vel,
+					gps_sample.time_us,                          // sample timestamp
+					velocity,                                    // observation
+					vel_obs_var,                                 // observation variance
+					math::max(_params.gps_vel_innov_gate, 1.f)); // innovation gate
 		const bool gnss_vel_enabled = (_params.gnss_ctrl & static_cast<int32_t>(GnssCtrl::VEL));
 
 		// GNSS position
@@ -114,13 +114,13 @@ void Ekf::controlGpsFusion(const imuSample &imu_delayed)
 			}
 		}
 
-		const float pos_var = sq(pos_noise);
+		const float pos_var = math::max(sq(pos_noise), sq(0.01f));
 		const Vector2f pos_obs_var(pos_var, pos_var);
-		updateHorizontalPositionAidSrcStatus(gps_sample.time_us,
-						     position,                                   // observation
-						     pos_obs_var,                                // observation variance
-						     math::max(_params.gps_pos_innov_gate, 1.f), // innovation gate
-						     _aid_src_gnss_pos);
+		updateHorizontalPositionAidStatus(_aid_src_gnss_pos,
+						  gps_sample.time_us,                          // sample timestamp
+						  position,                                    // observation
+						  pos_obs_var,                                 // observation variance
+						  math::max(_params.gps_pos_innov_gate, 1.f)); // innovation gate
 		const bool gnss_pos_enabled = (_params.gnss_ctrl & static_cast<int32_t>(GnssCtrl::HPOS));
 
 		// Determine if we should use GPS aiding for velocity and horizontal position
@@ -399,7 +399,6 @@ void Ekf::stopGpsYawFusion()
 	if (_control_status.flags.gps_yaw) {
 
 		_control_status.flags.gps_yaw = false;
-		resetEstimatorAidStatus(_aid_src_gnss_yaw);
 
 		// Before takeoff, we do not want to continue to rely on the current heading
 		// if we had to stop the fusion
@@ -418,8 +417,6 @@ void Ekf::stopGpsFusion()
 {
 	if (_control_status.flags.gps) {
 		ECL_INFO("stopping GPS position and velocity fusion");
-		resetEstimatorAidStatus(_aid_src_gnss_pos);
-		resetEstimatorAidStatus(_aid_src_gnss_vel);
 
 		_control_status.flags.gps = false;
 	}

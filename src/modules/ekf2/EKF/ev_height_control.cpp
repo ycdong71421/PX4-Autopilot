@@ -77,19 +77,21 @@ void Ekf::controlEvHeightFusion(const extVisionSample &ev_sample, const bool com
 	float measurement_var = math::max(pos_cov(2, 2), sq(_params.ev_pos_noise), sq(0.01f));
 
 #if defined(CONFIG_EKF2_GNSS)
+
 	// increase minimum variance if GPS active
 	if (_control_status.flags.gps_hgt) {
 		measurement_var = math::max(measurement_var, sq(_params.gps_pos_noise));
 	}
+
 #endif // CONFIG_EKF2_GNSS
 
 	const bool measurement_valid = PX4_ISFINITE(measurement) && PX4_ISFINITE(measurement_var);
 
-	updateVerticalPositionAidSrcStatus(ev_sample.time_us,
-					   measurement - bias_est.getBias(),
-					   measurement_var + bias_est.getBiasVar(),
-					   math::max(_params.ev_pos_innov_gate, 1.f),
-					   aid_src);
+	updateVerticalPositionAidStatus(aid_src,
+					ev_sample.time_us,
+					measurement - bias_est.getBias(),           // observation
+					measurement_var + bias_est.getBiasVar(),    // observation variance
+					math::max(_params.ev_pos_innov_gate, 1.f)); // gate sigma
 
 	// update the bias estimator before updating the main filter but after
 	// using its current state to compute the vertical position innovation
@@ -108,7 +110,6 @@ void Ekf::controlEvHeightFusion(const extVisionSample &ev_sample, const bool com
 	if (_control_status.flags.ev_hgt) {
 		if (continuing_conditions_passing) {
 			if (ev_reset) {
-
 				if (quality_sufficient) {
 					ECL_INFO("reset to %s", AID_SRC_NAME);
 
@@ -145,6 +146,7 @@ void Ekf::controlEvHeightFusion(const extVisionSample &ev_sample, const bool com
 				_information_events.flags.reset_hgt_to_ev = true;
 				resetVerticalPositionTo(measurement - bias_est.getBias(), measurement_var);
 				bias_est.setBias(-_state.pos(2) + measurement);
+				updateEstimatorAidStatusStateReset(aid_src, ev_sample.time_us, measurement - bias_est.getBias());
 
 				// reset vertical velocity
 				if (ev_sample.vel.isAllFinite() && (_params.ev_ctrl & static_cast<int32_t>(EvCtrl::VEL))) {
@@ -195,6 +197,7 @@ void Ekf::controlEvHeightFusion(const extVisionSample &ev_sample, const bool com
 				ECL_INFO("starting %s fusion, resetting state", AID_SRC_NAME);
 				_information_events.flags.reset_hgt_to_ev = true;
 				resetVerticalPositionTo(measurement, measurement_var);
+				updateEstimatorAidStatusStateReset(aid_src, ev_sample.time_us, measurement, measurement_var);
 
 				_height_sensor_ref = HeightSensor::EV;
 				bias_est.reset();
@@ -220,7 +223,6 @@ void Ekf::stopEvHgtFusion()
 		}
 
 		_ev_hgt_b_est.setFusionInactive();
-		resetEstimatorAidStatus(_aid_src_ev_hgt);
 
 		_control_status.flags.ev_hgt = false;
 	}

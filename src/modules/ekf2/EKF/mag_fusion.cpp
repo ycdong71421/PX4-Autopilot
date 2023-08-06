@@ -51,45 +51,14 @@
 
 #include <mathlib/mathlib.h>
 
-bool Ekf::fuseMag(const Vector3f &mag, estimator_aid_source3d_s &aid_src_mag, bool update_all_states)
+bool Ekf::fuseMag(VectorState& H, estimator_aid_source3d_s &aid_src_mag, bool update_all_states)
 {
-	// XYZ Measurement uncertainty. Need to consider timing errors for fast rotations
-	const float R_MAG = math::max(sq(_params.mag_noise), sq(0.01f));
-
 	// calculate intermediate variables used for X axis innovation variance, observation Jacobians and Kalman gains
-	Vector3f mag_innov;
-	Vector3f innov_var;
 
-	// Observation jacobian and Kalman gain vectors
-	VectorState H;
-	const auto state_vector = _state.vector();
-	sym::ComputeMagInnovInnovVarAndHx(state_vector, P, mag, R_MAG, FLT_EPSILON, &mag_innov, &innov_var, &H);
-
-	// do not use the synthesized measurement for the magnetomter Z component for 3D fusion
-	if (_control_status.flags.synthetic_mag_z) {
-		mag_innov(2) = 0.0f;
-	}
-
-	for (int i = 0; i < 3; i++) {
-		aid_src_mag.observation[i] = mag(i) - _state.mag_B(i);
-		aid_src_mag.observation_variance[i] = R_MAG;
-		aid_src_mag.innovation[i] = mag_innov(i);
-		aid_src_mag.innovation_variance[i] = innov_var(i);
-	}
-
-	const float innov_gate = math::max(_params.mag_innov_gate, 1.f);
-	setEstimatorAidStatusTestRatio(aid_src_mag, innov_gate);
-
-	if (update_all_states) {
-		_fault_status.flags.bad_mag_x = (aid_src_mag.innovation_variance[0] < aid_src_mag.observation_variance[0]);
-		_fault_status.flags.bad_mag_y = (aid_src_mag.innovation_variance[1] < aid_src_mag.observation_variance[1]);
-		_fault_status.flags.bad_mag_z = (aid_src_mag.innovation_variance[2] < aid_src_mag.observation_variance[2]);
-
-	} else {
-		_fault_status.flags.bad_mag_x = false;
-		_fault_status.flags.bad_mag_y = false;
-		_fault_status.flags.bad_mag_z = false;
-	}
+	// the innovation variance contribution from the state covariances is negative which means the covariance matrix is badly conditioned
+	_fault_status.flags.bad_mag_x = (aid_src_mag.innovation_variance[0] < aid_src_mag.observation_variance[0]);
+	_fault_status.flags.bad_mag_y = (aid_src_mag.innovation_variance[1] < aid_src_mag.observation_variance[1]);
+	_fault_status.flags.bad_mag_z = (aid_src_mag.innovation_variance[2] < aid_src_mag.observation_variance[2]);
 
 	// Perform an innovation consistency check and report the result
 	_innov_check_fail_status.flags.reject_mag_x = (aid_src_mag.test_ratio[0] > 1.f);
@@ -99,23 +68,27 @@ bool Ekf::fuseMag(const Vector3f &mag, estimator_aid_source3d_s &aid_src_mag, bo
 	const char *numerical_error_covariance_reset_string = "numerical error - covariance reset";
 
 	// check innovation variances for being badly conditioned
-	if (innov_var.min() < R_MAG) {
-		// the innovation variance contribution from the state covariances is negative which means the covariance matrix is badly conditioned
-		// we need to re-initialise covariances and abort this fusion step
-		if (update_all_states) {
-			resetQuatCov(_params.mag_heading_noise);
+	for (uint8_t index = 0; index < 3; index++) {
+		if (aid_src_mag.innovation_variance[index] < aid_src_mag.observation_variance[index]) {
+			// the innovation variance contribution from the state covariances is negative which means the covariance matrix is badly conditioned
+			// we need to re-initialise covariances and abort this fusion step
+			if (update_all_states) {
+				resetQuatCov(_params.mag_heading_noise);
+			}
+
+			resetMagCov();
+
+			ECL_ERR("mag %s", numerical_error_covariance_reset_string);
+			return false;
 		}
-
-		resetMagCov();
-
-		ECL_ERR("mag %s", numerical_error_covariance_reset_string);
-		return false;
 	}
 
 	// if any axis fails, abort the mag fusion
 	if (aid_src_mag.innovation_rejected) {
 		return false;
 	}
+
+	const auto state_vector = _state.vector();
 
 	bool fused[3] {false, false, false};
 
@@ -127,12 +100,12 @@ bool Ekf::fuseMag(const Vector3f &mag, estimator_aid_source3d_s &aid_src_mag, bo
 
 		} else if (index == 1) {
 			// recalculate innovation variance because state covariances have changed due to previous fusion (linearise using the same initial state for all axes)
-			sym::ComputeMagYInnovVarAndH(state_vector, P, R_MAG, FLT_EPSILON, &aid_src_mag.innovation_variance[index], &H);
+			sym::ComputeMagYInnovVarAndH(state_vector, P, aid_src_mag.observation_variance[index], FLT_EPSILON, &aid_src_mag.innovation_variance[index], &H);
 
 			// recalculate innovation using the updated state
-			aid_src_mag.innovation[index] = _state.quat_nominal.rotateVectorInverse(_state.mag_I)(index) + _state.mag_B(index) - mag(index);
+			aid_src_mag.innovation[index] = _state.quat_nominal.rotateVectorInverse(_state.mag_I)(index) + _state.mag_B(index) - aid_src_mag.observation[index];
 
-			if (aid_src_mag.innovation_variance[index] < R_MAG) {
+			if (aid_src_mag.innovation_variance[index] < aid_src_mag.observation_variance[index]) {
 				// the innovation variance contribution from the state covariances is negative which means the covariance matrix is badly conditioned
 				_fault_status.flags.bad_mag_y = true;
 
@@ -155,12 +128,12 @@ bool Ekf::fuseMag(const Vector3f &mag, estimator_aid_source3d_s &aid_src_mag, bo
 			}
 
 			// recalculate innovation variance because state covariances have changed due to previous fusion (linearise using the same initial state for all axes)
-			sym::ComputeMagZInnovVarAndH(state_vector, P, R_MAG, FLT_EPSILON, &aid_src_mag.innovation_variance[index], &H);
+			sym::ComputeMagZInnovVarAndH(state_vector, P, aid_src_mag.observation_variance[index], FLT_EPSILON, &aid_src_mag.innovation_variance[index], &H);
 
 			// recalculate innovation using the updated state
-			aid_src_mag.innovation[index] = _state.quat_nominal.rotateVectorInverse(_state.mag_I)(index) + _state.mag_B(index) - mag(index);
+			aid_src_mag.innovation[index] = _state.quat_nominal.rotateVectorInverse(_state.mag_I)(index) + _state.mag_B(index) - aid_src_mag.observation[index];
 
-			if (aid_src_mag.innovation_variance[index] < R_MAG) {
+			if (aid_src_mag.innovation_variance[index] < aid_src_mag.observation_variance[index]) {
 				// the innovation variance contribution from the state covariances is negative which means the covariance matrix is badly conditioned
 				_fault_status.flags.bad_mag_z = true;
 

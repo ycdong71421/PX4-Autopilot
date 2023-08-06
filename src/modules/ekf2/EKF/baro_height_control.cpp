@@ -59,8 +59,6 @@ void Ekf::controlBaroHeightFusion()
 
 		const float measurement_var = sq(_params.baro_noise);
 
-		const float innov_gate = fmaxf(_params.baro_innov_gate, 1.f);
-
 		const bool measurement_valid = PX4_ISFINITE(measurement) && PX4_ISFINITE(measurement_var);
 
 		if (measurement_valid) {
@@ -80,11 +78,11 @@ void Ekf::controlBaroHeightFusion()
 		}
 
 		// vertical position innovation - baro measurement has opposite sign to earth z axis
-		updateVerticalPositionAidSrcStatus(baro_sample.time_us,
-						   -(measurement - bias_est.getBias()),
-						   measurement_var + bias_est.getBiasVar(),
-						   innov_gate,
-						   aid_src);
+		updateVerticalPositionAidStatus(aid_src,
+						baro_sample.time_us,
+						-(measurement - bias_est.getBias()),      // observation
+						measurement_var + bias_est.getBiasVar(),  // observation variance
+						math::max(_params.baro_innov_gate, 1.f)); // gate sigma
 
 		// Compensate for positive static pressure transients (negative vertical position innovations)
 		// caused by rotor wash ground interaction by applying a temporary deadzone to baro innovations.
@@ -121,7 +119,6 @@ void Ekf::controlBaroHeightFusion()
 				&& isNewestSampleRecent(_time_last_baro_buffer_push, 2 * BARO_MAX_INTERVAL);
 
 		if (_control_status.flags.baro_hgt) {
-
 			if (continuing_conditions_passing) {
 
 				fuseVerticalPosition(aid_src);
@@ -191,7 +188,6 @@ void Ekf::stopBaroHgtFusion()
 		}
 
 		_baro_b_est.setFusionInactive();
-		resetEstimatorAidStatus(_aid_src_baro_hgt);
 
 		_control_status.flags.baro_hgt = false;
 	}

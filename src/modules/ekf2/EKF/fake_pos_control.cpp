@@ -65,8 +65,11 @@ void Ekf::controlFakePosFusion()
 
 		const float innov_gate = 3.f;
 
-		updateHorizontalPositionAidSrcStatus(_time_delayed_us, Vector2f(_last_known_pos), obs_var, innov_gate, aid_src);
-
+		updateHorizontalPositionAidStatus(aid_src,
+						  _time_delayed_us,
+						  Vector2f(_last_known_pos), // observation
+						  obs_var,                   // observation variance
+						  innov_gate);
 
 		const bool continuing_conditions_passing = !isHorizontalAidingActive();
 		const bool starting_conditions_passing = continuing_conditions_passing
@@ -77,8 +80,8 @@ void Ekf::controlFakePosFusion()
 
 				// always protect against extreme values that could result in a NaN
 				if ((aid_src.test_ratio[0] < sq(100.0f / innov_gate))
-				&& (aid_src.test_ratio[1] < sq(100.0f / innov_gate))
-				) {
+				    && (aid_src.test_ratio[1] < sq(100.0f / innov_gate))
+				   ) {
 					fuseHorizontalPosition(aid_src);
 				}
 
@@ -128,7 +131,5 @@ void Ekf::stopFakePosFusion()
 	if (_control_status.flags.fake_pos) {
 		ECL_INFO("stop fake position fusion");
 		_control_status.flags.fake_pos = false;
-
-		resetEstimatorAidStatus(_aid_src_fake_pos);
 	}
 }

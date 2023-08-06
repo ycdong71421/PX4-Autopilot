@@ -205,8 +205,6 @@ void Ekf::stopHaglRngFusion()
 		ECL_INFO("stopping HAGL range fusion");
 
 		// reset flags
-		resetEstimatorAidStatus(_aid_src_terrain_range_finder);
-
 		_innov_check_fail_status.flags.reject_hagl = false;
 
 		_hagl_sensor_status.flags.range_finder = false;
@@ -233,18 +231,13 @@ void Ekf::updateHaglRng(estimator_aid_source1d_s &aid_src) const
 	// perform an innovation consistency check and only fuse data if it passes
 	const float innov_gate = fmaxf(_params.range_innov_gate, 1.0f);
 
-
-	aid_src.timestamp_sample = _time_delayed_us; // TODO
-
-	aid_src.observation = meas_hagl;
-	aid_src.observation_variance = obs_variance;
-
-	aid_src.innovation = hagl_innov;
-	aid_src.innovation_variance = hagl_innov_var;
-
-	setEstimatorAidStatusTestRatio(aid_src, innov_gate);
-
-	aid_src.fused = false;
+	updateEstimatorAidStatus(aid_src,
+		_time_delayed_us,              // sample timestamp
+		meas_hagl,                     // observation
+		obs_variance,                  // observation variance
+		hagl_innov,                    // innovation
+		hagl_innov_var,                // innovation variance
+		innov_gate);                   // gate sigma
 }
 
 void Ekf::fuseHaglRng(estimator_aid_source1d_s &aid_src)
@@ -329,7 +322,6 @@ void Ekf::stopHaglFlowFusion()
 		ECL_INFO("stopping HAGL flow fusion");
 
 		_hagl_sensor_status.flags.flow = false;
-		resetEstimatorAidStatus(_aid_src_terrain_optical_flow);
 	}
 }
 
@@ -345,30 +337,14 @@ void Ekf::resetHaglFlow()
 
 void Ekf::fuseFlowForTerrain(estimator_aid_source2d_s &flow)
 {
-	flow.fused = true;
-
-	const float R_LOS = flow.observation_variance[0];
-
-	// calculate the height above the ground of the optical flow camera. Since earth frame is NED
-	// a positive offset in earth frame leads to a smaller height above the ground.
-	float range = predictFlowRange();
-
-	const float state = _terrain_vpos; // linearize both axes using the same state value
-	Vector2f innov_var;
-	float H;
-	sym::TerrEstComputeFlowXyInnovVarAndHx(state, _terrain_var, _state.quat_nominal, _state.vel, _state.pos(2), R_LOS, FLT_EPSILON, &innov_var, &H);
-	innov_var.copyTo(flow.innovation_variance);
-
-	if ((flow.innovation_variance[0] < R_LOS)
-	    || (flow.innovation_variance[1] < R_LOS)) {
+	if ((flow.innovation_variance[0] < flow.observation_variance[0])
+	    || (flow.innovation_variance[1] < flow.observation_variance[1])
+	) {
 		// we need to reinitialise the covariance matrix and abort this fusion step
 		ECL_ERR("Opt flow error - covariance reset");
 		_terrain_var = 100.0f;
 		return;
 	}
-
-	// run the innovation consistency check and record result
-	setEstimatorAidStatusTestRatio(flow, math::max(_params.flow_innov_gate, 1.f));
 
 	_innov_check_fail_status.flags.reject_optflow_X = (flow.test_ratio[0] > 1.f);
 	_innov_check_fail_status.flags.reject_optflow_Y = (flow.test_ratio[1] > 1.f);
@@ -378,6 +354,8 @@ void Ekf::fuseFlowForTerrain(estimator_aid_source2d_s &flow)
 		return;
 	}
 
+	float H = 0.f;
+
 	// fuse observation axes sequentially
 	for (uint8_t index = 0; index <= 1; index++) {
 		if (index == 0) {
@@ -385,14 +363,14 @@ void Ekf::fuseFlowForTerrain(estimator_aid_source2d_s &flow)
 
 		} else if (index == 1) {
 			// recalculate innovation variance because state covariances have changed due to previous fusion (linearise using the same initial state for all axes)
-			sym::TerrEstComputeFlowYInnovVarAndH(state, _terrain_var, _state.quat_nominal, _state.vel, _state.pos(2), R_LOS, FLT_EPSILON, &flow.innovation_variance[1], &H);
+			sym::TerrEstComputeFlowYInnovVarAndH(_terrain_vpos, _terrain_var, _state.quat_nominal, _state.vel, _state.pos(2), flow.observation_variance[1], FLT_EPSILON, &flow.innovation_variance[1], &H);
 
 			// recalculate the innovation using the updated state
 			const Vector2f vel_body = predictFlowVelBody();
-			range = predictFlowRange();
+			float range = predictFlowRange();
 			flow.innovation[1] = (-vel_body(0) / range) - flow.observation[1];
 
-			if (flow.innovation_variance[1] < R_LOS) {
+			if (flow.innovation_variance[1] < flow.observation_variance[1]) {
 				// we need to reinitialise the covariance matrix and abort this fusion step
 				ECL_ERR("Opt flow error - covariance reset");
 				_terrain_var = 100.0f;

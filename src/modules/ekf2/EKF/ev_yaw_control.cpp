@@ -43,11 +43,22 @@ void Ekf::controlEvYawFusion(const extVisionSample &ev_sample, const bool common
 {
 	static constexpr const char *AID_SRC_NAME = "EV yaw";
 
-	resetEstimatorAidStatus(aid_src);
-	aid_src.timestamp_sample = ev_sample.time_us;
-	aid_src.observation = getEulerYaw(ev_sample.quat);
-	aid_src.observation_variance = math::max(ev_sample.orientation_var(2), _params.ev_att_noise, sq(0.01f));
-	aid_src.innovation = wrap_pi(getEulerYaw(_R_to_earth) - aid_src.observation);
+	float obs = getEulerYaw(ev_sample.quat);
+	float obs_var = math::max(ev_sample.orientation_var(2), _params.ev_att_noise, sq(0.01f));
+
+	float innov = wrap_pi(getEulerYaw(_R_to_earth) - obs);
+	float innov_var = 0.f;
+
+	VectorState H_YAW;
+	computeYawInnovVarAndH(obs_var, innov_var, H_YAW);
+
+	updateEstimatorAidStatus(aid_src,
+		ev_sample.time_us,                           // sample timestamp
+		obs,                                         // observation
+		obs_var,                                     // observation variance
+		innov,                                       // innovation
+		innov_var,                                   // innovation variance
+		math::max(_params.heading_innov_gate, 1.f)); // gate sigma
 
 	if (ev_reset) {
 		_control_status.flags.ev_yaw_fault = false;
@@ -65,10 +76,6 @@ void Ekf::controlEvYawFusion(const extVisionSample &ev_sample, const bool common
 	    && (ev_sample.pos_frame != PositionFrame::LOCAL_FRAME_NED)
 	   ) {
 		continuing_conditions_passing = false;
-
-		// use delta yaw for innovation logging
-		aid_src.innovation = wrap_pi(wrap_pi(getEulerYaw(_R_to_earth) - _ev_yaw_pred_prev)
-					     - wrap_pi(getEulerYaw(ev_sample.quat) - getEulerYaw(_ev_sample_prev.quat)));
 	}
 
 	const bool starting_conditions_passing = common_starting_conditions_passing
@@ -94,7 +101,7 @@ void Ekf::controlEvYawFusion(const extVisionSample &ev_sample, const bool common
 				}
 
 			} else if (quality_sufficient) {
-				fuseYaw(aid_src);
+				fuseYaw(aid_src, H_YAW);
 
 			} else {
 				aid_src.innovation_rejected = true;
@@ -140,7 +147,7 @@ void Ekf::controlEvYawFusion(const extVisionSample &ev_sample, const bool common
 			// activate fusion
 			if (ev_sample.pos_frame == PositionFrame::LOCAL_FRAME_NED) {
 
-				if (_control_status.flags.yaw_align) {
+				if (_control_status.flags.yaw_align && fuseYaw(aid_src, H_YAW)) {
 					ECL_INFO("starting %s fusion", AID_SRC_NAME);
 
 				} else {
@@ -160,6 +167,7 @@ void Ekf::controlEvYawFusion(const extVisionSample &ev_sample, const bool common
 
 				// reset yaw to EV
 				resetQuatStateYaw(aid_src.observation, aid_src.observation_variance);
+				// TODO: update aid_src?
 				aid_src.time_last_fuse = _time_delayed_us;
 
 				_information_events.flags.starting_vision_yaw_fusion = true;
@@ -178,7 +186,6 @@ void Ekf::stopEvYawFusion()
 {
 #if defined(CONFIG_EKF2_EXTERNAL_VISION)
 	if (_control_status.flags.ev_yaw) {
-		resetEstimatorAidStatus(_aid_src_ev_yaw);
 
 		_control_status.flags.ev_yaw = false;
 	}

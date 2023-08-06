@@ -11,8 +11,11 @@ float32[3] observation
 float32[3] observation_variance
 
 float32[3] innovation
+float32[3] innovation_filtered
 float32[3] innovation_variance
+
 float32[3] test_ratio
+float32[3] test_ratio_filtered
 
 bool innovation_rejected     # true if the observation has been rejected
 bool fused                   # true if the sample was successfully fused

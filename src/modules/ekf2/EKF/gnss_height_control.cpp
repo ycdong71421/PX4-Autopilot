@@ -63,16 +63,14 @@ void Ekf::controlGnssHeightFusion(const gpsSample &gps_sample)
 		const float measurement = gps_sample.hgt - getEkfGlobalOriginAltitude();
 		const float measurement_var = sq(noise);
 
-		const float innov_gate = math::max(_params.gps_pos_innov_gate, 1.f);
-
 		const bool measurement_valid = PX4_ISFINITE(measurement) && PX4_ISFINITE(measurement_var);
 
 		// GNSS position, vertical position GNSS measurement has opposite sign to earth z axis
-		updateVerticalPositionAidSrcStatus(gps_sample.time_us,
-						   -(measurement - bias_est.getBias()),
-						   measurement_var + bias_est.getBiasVar(),
-						   innov_gate,
-						   aid_src);
+		updateVerticalPositionAidStatus(aid_src,
+						gps_sample.time_us,
+						-(measurement - bias_est.getBias()),
+						measurement_var + bias_est.getBiasVar(),
+						math::max(_params.gps_pos_innov_gate, 1.f));
 
 		const bool gps_checks_passing = isTimedOut(_last_gps_fail_us, (uint64_t)5e6);
 		const bool gps_checks_failing = isTimedOut(_last_gps_pass_us, (uint64_t)5e6);
@@ -173,7 +171,6 @@ void Ekf::stopGpsHgtFusion()
 		}
 
 		_gps_hgt_b_est.setFusionInactive();
-		resetEstimatorAidStatus(_aid_src_gnss_hgt);
 
 		_control_status.flags.gps_hgt = false;
 	}

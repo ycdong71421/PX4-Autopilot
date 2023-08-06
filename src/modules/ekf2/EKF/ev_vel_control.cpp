@@ -107,12 +107,14 @@ void Ekf::controlEvVelFusion(const extVisionSample &ev_sample, const bool common
 	}
 
 #if defined(CONFIG_EKF2_GNSS)
+
 	// increase minimum variance if GPS active (position reference)
 	if (_control_status.flags.gps) {
 		for (int i = 0; i < 2; i++) {
 			vel_cov(i, i) = math::max(vel_cov(i, i), sq(_params.gps_vel_noise));
 		}
 	}
+
 #endif // CONFIG_EKF2_GNSS
 
 	const Vector3f measurement{vel};
@@ -125,11 +127,11 @@ void Ekf::controlEvVelFusion(const extVisionSample &ev_sample, const bool common
 
 	const bool measurement_valid = measurement.isAllFinite() && measurement_var.isAllFinite();
 
-	updateVelocityAidSrcStatus(ev_sample.time_us,
-				   measurement,                               // observation
-				   measurement_var,                           // observation variance
-				   math::max(_params.ev_vel_innov_gate, 1.f), // innovation gate
-				   aid_src);
+	updateVelocityAidStatus(aid_src,
+				ev_sample.time_us,                          // sample timestamp
+				measurement,                                // observation
+				measurement_var,                            // observation variance
+				math::max(_params.ev_vel_innov_gate, 1.f)); // innovation gate
 
 	if (!measurement_valid) {
 		continuing_conditions_passing = false;
@@ -140,7 +142,6 @@ void Ekf::controlEvVelFusion(const extVisionSample &ev_sample, const bool common
 			&& ((Vector3f(aid_src.test_ratio).max() < 0.1f) || !isHorizontalAidingActive());
 
 	if (_control_status.flags.ev_vel) {
-
 		if (continuing_conditions_passing) {
 
 			if ((ev_reset && isOnlyActiveSourceOfHorizontalAiding(_control_status.flags.ev_vel)) || yaw_alignment_changed) {
@@ -149,6 +150,7 @@ void Ekf::controlEvVelFusion(const extVisionSample &ev_sample, const bool common
 					ECL_INFO("reset to %s", AID_SRC_NAME);
 					_information_events.flags.reset_vel_to_vision = true;
 					resetVelocityTo(measurement, measurement_var);
+					updateEstimatorAidStatusStateReset(aid_src, ev_sample.time_us, measurement, measurement_var);
 					aid_src.time_last_fuse = _time_delayed_us;
 
 				} else {
@@ -174,7 +176,7 @@ void Ekf::controlEvVelFusion(const extVisionSample &ev_sample, const bool common
 					_information_events.flags.reset_vel_to_vision = true;
 					ECL_WARN("%s fusion failing, resetting", AID_SRC_NAME);
 					resetVelocityTo(measurement, measurement_var);
-					aid_src.time_last_fuse = _time_delayed_us;
+					updateEstimatorAidStatusStateReset(aid_src, ev_sample.time_us, measurement, measurement_var);
 
 					if (_control_status.flags.in_air) {
 						_nb_ev_vel_reset_available--;
@@ -205,9 +207,12 @@ void Ekf::controlEvVelFusion(const extVisionSample &ev_sample, const bool common
 		if (starting_conditions_passing) {
 			// activate fusion, only reset if necessary
 			if (!isHorizontalAidingActive() || yaw_alignment_changed) {
-				ECL_INFO("starting %s fusion, resetting velocity to (%.3f, %.3f, %.3f)", AID_SRC_NAME, (double)measurement(0), (double)measurement(1), (double)measurement(2));
+				ECL_INFO("starting %s fusion, resetting velocity to (%.3f, %.3f, %.3f)", AID_SRC_NAME,
+					 (double)measurement(0), (double)measurement(1), (double)measurement(2));
+
 				_information_events.flags.reset_vel_to_vision = true;
 				resetVelocityTo(measurement, measurement_var);
+				updateEstimatorAidStatusStateReset(aid_src, ev_sample.time_us, measurement, measurement_var);
 
 			} else {
 				ECL_INFO("starting %s fusion", AID_SRC_NAME);
@@ -225,7 +230,6 @@ void Ekf::controlEvVelFusion(const extVisionSample &ev_sample, const bool common
 void Ekf::stopEvVelFusion()
 {
 	if (_control_status.flags.ev_vel) {
-		resetEstimatorAidStatus(_aid_src_ev_vel);
 
 		_control_status.flags.ev_vel = false;
 	}

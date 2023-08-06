@@ -80,22 +80,23 @@ void AuxGlobalPosition::update(Ekf &ekf, const estimator::imuSample &imu_delayed
 			//const float hgt = ekf.getEkfGlobalOriginAltitude() - (float)sample.altitude;
 			// relax the upper observation noise limit which prevents bad measurements perturbing the position estimate
 			float pos_noise = math::max(sample.eph, _param_ekf2_agp_noise.get());
-			const float pos_var = sq(pos_noise);
+			const float pos_var = math::max(sq(pos_noise), sq(0.01f));
 			const Vector2f pos_obs_var(pos_var, pos_var);
-			ekf.updateHorizontalPositionAidSrcStatus(sample.time_us,
-					position,                                   // observation
-					pos_obs_var,                                // observation variance
-					math::max(_param_ekf2_agp_gate.get(), 1.f), // innovation gate
-					aid_src);
+			ekf.updateHorizontalPositionAidStatus(aid_src,
+							      sample.time_us,
+							      position,                                   // observation
+							      pos_obs_var,                                // observation variance
+							      math::max(_param_ekf2_agp_gate.get(), 1.f)); // innovation gate
 		}
 
 		const bool starting_conditions = PX4_ISFINITE(sample.latitude) && PX4_ISFINITE(sample.longitude)
-						   && ekf.control_status_flags().yaw_align;
+						 && ekf.control_status_flags().yaw_align;
 		const bool continuing_conditions = starting_conditions
 						   && ekf.global_origin_valid();
 
 		switch (_state) {
 		case State::stopped:
+
 		/* FALLTHROUGH */
 		case State::starting:
 			if (starting_conditions) {
@@ -113,6 +114,7 @@ void AuxGlobalPosition::update(Ekf &ekf, const estimator::imuSample &imu_delayed
 					}
 				}
 			}
+
 			break;
 
 		case State::active:
@@ -123,6 +125,7 @@ void AuxGlobalPosition::update(Ekf &ekf, const estimator::imuSample &imu_delayed
 				ekf.disableControlStatusAuxGpos();
 				_state = State::stopped;
 			}
+
 			break;
 
 		default:
@@ -133,6 +136,7 @@ void AuxGlobalPosition::update(Ekf &ekf, const estimator::imuSample &imu_delayed
 		aid_src.timestamp = hrt_absolute_time();
 		_estimator_aid_src_aux_global_position_pub.publish(aid_src);
 #endif // MODULE_NAME
+
 	} else if ((_state != State::stopped) && isTimedOut(_time_last_buffer_push, imu_delayed.time_us, (uint64_t)5e6)) {
 		ekf.disableControlStatusAuxGpos();
 		_state = State::stopped;

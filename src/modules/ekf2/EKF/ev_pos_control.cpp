@@ -126,12 +126,14 @@ void Ekf::controlEvPosFusion(const extVisionSample &ev_sample, const bool common
 	}
 
 #if defined(CONFIG_EKF2_GNSS)
+
 	// increase minimum variance if GPS active (position reference)
 	if (_control_status.flags.gps) {
 		for (int i = 0; i < 2; i++) {
 			pos_cov(i, i) = math::max(pos_cov(i, i), sq(_params.gps_pos_noise));
 		}
 	}
+
 #endif // CONFIG_EKF2_GNSS
 
 	const Vector2f measurement{pos(0), pos(1)};
@@ -155,11 +157,11 @@ void Ekf::controlEvPosFusion(const extVisionSample &ev_sample, const bool common
 		}
 	}
 
-	updateHorizontalPositionAidSrcStatus(ev_sample.time_us,
-					     measurement - _ev_pos_b_est.getBias(),        // observation
-					     measurement_var + _ev_pos_b_est.getBiasVar(), // observation variance
-					     math::max(_params.ev_pos_innov_gate, 1.f),    // innovation gate
-					     aid_src);
+	updateHorizontalPositionAidStatus(aid_src,
+					  ev_sample.time_us,
+					  measurement - _ev_pos_b_est.getBias(),        // observation
+					  measurement_var + _ev_pos_b_est.getBiasVar(), // observation variance
+					  math::max(_params.ev_pos_innov_gate, 1.f));   // gate sigma
 
 	// update the bias estimator before updating the main filter but after
 	// using its current state to compute the vertical position innovation
@@ -177,7 +179,6 @@ void Ekf::controlEvPosFusion(const extVisionSample &ev_sample, const bool common
 			&& continuing_conditions_passing;
 
 	if (_control_status.flags.ev_pos) {
-
 		if (continuing_conditions_passing) {
 			const bool bias_estimator_change = (bias_fusion_was_active != _ev_pos_b_est.fusionActive());
 			const bool reset = ev_reset || yaw_alignment_changed || bias_estimator_change;
@@ -221,7 +222,8 @@ void Ekf::startEvPosFusion(const Vector2f &measurement, const Vector2f &measurem
 	_control_status.flags.ev_pos = true;
 }
 
-void Ekf::updateEvPosFusion(const Vector2f &measurement, const Vector2f &measurement_var, bool quality_sufficient, bool reset, estimator_aid_source2d_s &aid_src)
+void Ekf::updateEvPosFusion(const Vector2f &measurement, const Vector2f &measurement_var, bool quality_sufficient,
+			    bool reset, estimator_aid_source2d_s &aid_src)
 {
 	if (reset) {
 
@@ -297,8 +299,6 @@ void Ekf::updateEvPosFusion(const Vector2f &measurement, const Vector2f &measure
 void Ekf::stopEvPosFusion()
 {
 	if (_control_status.flags.ev_pos) {
-		resetEstimatorAidStatus(_aid_src_ev_pos);
-
 		_control_status.flags.ev_pos = false;
 	}
 }

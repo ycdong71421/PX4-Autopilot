@@ -40,9 +40,11 @@ void Ekf::controlAuxVelFusion()
 
 		if (_auxvel_buffer->pop_first_older_than(_time_delayed_us, &auxvel_sample_delayed)) {
 
-			resetEstimatorAidStatus(_aid_src_aux_vel);
-
-			updateVelocityAidSrcStatus(auxvel_sample_delayed.time_us, auxvel_sample_delayed.vel, auxvel_sample_delayed.velVar, fmaxf(_params.auxvel_gate, 1.f), _aid_src_aux_vel);
+			updateVelocityAidStatus(_aid_src_aux_vel,
+				auxvel_sample_delayed.time_us,        // sample timestamp
+				auxvel_sample_delayed.vel,            // observation
+				auxvel_sample_delayed.velVar,         // observation variance
+				math::max(_params.auxvel_gate, 1.f)); // gate sigma
 
 			if (isHorizontalAidingActive()) {
 				fuseVelocity(_aid_src_aux_vel);
@@ -55,5 +57,4 @@ void Ekf::stopAuxVelFusion()
 {
 	ECL_INFO("stopping aux vel fusion");
 	//_control_status.flags.aux_vel = false;
-	resetEstimatorAidStatus(_aid_src_aux_vel);
 }

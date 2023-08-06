@@ -105,12 +105,15 @@ void Ekf::fuseDrag(const dragSample &drag_sample)
 		bcoef_inv(1) = bcoef_inv(0);
 	}
 
-	_aid_src_drag.timestamp_sample = drag_sample.time_us;
-	_aid_src_drag.fused = false;
-
 	bool fused[] {false, false};
 
-	VectorState Kfusion;
+	Vector2f observation{};
+	Vector2f observation_variance{R_ACC, R_ACC};
+	Vector2f innovation{};
+	Vector2f innovation_variance{NAN, NAN};
+
+	// Apply an innovation consistency check with a 5 Sigma threshold
+	const float innov_gate = 5.f;
 
 	// perform sequential fusion of XY specific forces
 	for (uint8_t axis_index = 0; axis_index < 2; axis_index++) {
@@ -122,14 +125,14 @@ void Ekf::fuseDrag(const dragSample &drag_sample)
 		// parallel to the rotor disc and mass flow through the rotor disc.
 		const float pred_acc = -0.5f * bcoef_inv(axis_index) * rho * rel_wind_body(axis_index) * rel_wind_speed - rel_wind_body(axis_index) * mcoef_corrrected;
 
-		_aid_src_drag.observation[axis_index] = mea_acc;
-		_aid_src_drag.observation_variance[axis_index] = R_ACC;
-		_aid_src_drag.innovation[axis_index] = pred_acc - mea_acc;
-		_aid_src_drag.innovation_variance[axis_index] = NAN; // reset
+		observation(axis_index) = mea_acc;
+		innovation(axis_index) = pred_acc - mea_acc;
+
+		VectorState Kfusion;
 
 		if (axis_index == 0) {
 			sym::ComputeDragXInnovVarAndK(state_vector_prev, P, rho, bcoef_inv(axis_index), mcoef_corrrected, R_ACC, FLT_EPSILON,
-						      &_aid_src_drag.innovation_variance[axis_index], &Kfusion);
+						      &innovation_variance(axis_index), &Kfusion);
 
 			if (!using_bcoef_x && !using_mcoef) {
 				continue;
@@ -137,31 +140,38 @@ void Ekf::fuseDrag(const dragSample &drag_sample)
 
 		} else if (axis_index == 1) {
 			sym::ComputeDragYInnovVarAndK(state_vector_prev, P, rho, bcoef_inv(axis_index), mcoef_corrrected, R_ACC, FLT_EPSILON,
-						      &_aid_src_drag.innovation_variance[axis_index], &Kfusion);
+						      &innovation_variance(axis_index), &Kfusion);
 
 			if (!using_bcoef_y && !using_mcoef) {
 				continue;
 			}
 		}
 
-		if (_aid_src_drag.innovation_variance[axis_index] < R_ACC) {
+		if (innovation_variance(axis_index) < R_ACC) {
 			// calculation is badly conditioned
-			return;
+			break;
 		}
 
-		// Apply an innovation consistency check with a 5 Sigma threshold
-		const float innov_gate = 5.f;
-		setEstimatorAidStatusTestRatio(_aid_src_drag, innov_gate);
+		const float test_ratio = sq(innovation(axis_index)) / (sq(innov_gate) * innovation_variance(axis_index));
 
 		if (_control_status.flags.in_air && _control_status.flags.wind && !_control_status.flags.fake_pos
-		    && PX4_ISFINITE(_aid_src_drag.innovation_variance[axis_index]) && PX4_ISFINITE(_aid_src_drag.innovation[axis_index])
-		    && (_aid_src_drag.test_ratio[axis_index] < 1.f)
+		    && PX4_ISFINITE(innovation_variance(axis_index)) && PX4_ISFINITE(innovation(axis_index))
+		    && (test_ratio < 1.f)
 		   ) {
-			if (measurementUpdate(Kfusion, _aid_src_drag.innovation_variance[axis_index], _aid_src_drag.innovation[axis_index])) {
+			if (measurementUpdate(Kfusion, innovation_variance(axis_index), innovation(axis_index))) {
 				fused[axis_index] = true;
 			}
 		}
 	}
+
+	updateEstimatorAidStatus(_aid_src_drag,
+		drag_sample.time_us,  // sample timestamp
+		observation,          // observation
+		observation_variance, // observation variance
+		innovation,           // innovation
+		innovation_variance,  // innovation variance
+		innov_gate            // gate sigma
+	);
 
 	if (fused[0] && fused[1]) {
 		_aid_src_drag.fused = true;
