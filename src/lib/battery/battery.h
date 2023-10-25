@@ -178,4 +178,5 @@ private:
 	hrt_abstime _last_timestamp{0};
 	bool _armed{false};
 	hrt_abstime _last_unconnected_timestamp{0};
+	bool _vtol_was_in_mc_mode{false};
 };
