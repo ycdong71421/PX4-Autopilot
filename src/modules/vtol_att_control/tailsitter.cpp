@@ -67,8 +67,11 @@ void Tailsitter::update_vtol_state()
 
 	if (_vtol_vehicle_status->fixed_wing_system_failure) {
 		// Failsafe event, switch to MC mode immediately
+		if (_vtol_mode != vtol_mode::MC_MODE) {
+			_transition_start_timestamp = hrt_absolute_time();
+		}
+
 		_vtol_mode = vtol_mode::MC_MODE;
-		_transition_start_timestamp = hrt_absolute_time();
 
 	} else if (!_attc->is_fixed_wing_requested()) {
 
